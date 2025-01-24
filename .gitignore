@@ -1,0 +1,5 @@
+**/.deps/
+**/.vscode/
+**/artifacts/
+**/bin/
+**/obj/

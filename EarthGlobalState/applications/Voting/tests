@@ -1,0 +1,5 @@
+#!/bin/bash
+
+echo "Starting tests..."
+npx hardhat test
+echo "Tests completed."

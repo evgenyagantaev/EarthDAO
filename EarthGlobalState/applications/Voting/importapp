@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# Removing contracts directory
+if [ -d "contracts" ]; then
+  echo "Removing contracts directory..."
+  rm -rf contracts
+else
+  echo "Contracts directory not found."
+fi
+
+# Removing test directory
+if [ -d "test" ]; then
+  echo "Removing test directory..."
+  rm -rf test
+else
+  echo "Test directory not found."
+fi
+
+# Copying contracts directory from app
+if [ -d "$HOME/app/contracts" ]; then
+  echo "Copying contracts directory from app..."
+  cp -r "$HOME/app/contracts" .
+else
+  echo "Source directory ~/app/contracts not found."
+fi
+
+# Copying test directory from app
+if [ -d "$HOME/app/test" ]; then
+  echo "Copying test directory from app..."
+  cp -r "$HOME/app/test" .
+else
+  echo "Source directory ~/app/test not found."
+fi
+
+echo "importapp operation completed."

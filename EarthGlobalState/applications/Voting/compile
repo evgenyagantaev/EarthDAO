@@ -1,0 +1,5 @@
+#!/bin/bash
+
+echo "Starting compilation..."
+npx hardhat compile
+echo "Compilation completed."
