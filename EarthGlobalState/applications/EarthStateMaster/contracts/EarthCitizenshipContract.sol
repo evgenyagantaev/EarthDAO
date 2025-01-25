@@ -12,17 +12,24 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract EarthCitizenshipContract is ERC721, ERC721URIStorage, ERC721Burnable, Ownable 
 {
     uint256 private _nextTokenId;
+    string private _baseTokenURI;
 
-    constructor() ERC721("GlobalFreeLaborExchangeProfile", "GFLEP") Ownable(msg.sender) 
+    constructor() ERC721("EarthCitizenship", "GEC") Ownable(msg.sender) 
     {
         _nextTokenId = 0;
     }
 
-    function safeMint(string memory uri) external 
+    function setBaseURI(string memory newURI) external onlyOwner 
     {
+        _baseTokenURI = newURI;
+    }
+
+    function safeMint() external 
+    {
+        require(balanceOf(msg.sender) == 0, "Address already has a citizenship token");
         uint256 tokenId = _nextTokenId++;
         _safeMint(msg.sender, tokenId);
-        _setTokenURI(tokenId, uri);
+        _setTokenURI(tokenId, _baseTokenURI);
     }
 
     // The following functions are overrides required by Solidity.
