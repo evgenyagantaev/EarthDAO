@@ -3,21 +3,40 @@
 
 pragma solidity ^0.8.22;
 
-import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import {ERC721Burnable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
-import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import {ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
+import {ERC721BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721BurnableUpgradeable.sol";
+import {ERC721URIStorageUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 /// @custom:security-contact eagantaev@gmail.com
-contract EarthCitizenshipContract is ERC721, ERC721URIStorage, ERC721Burnable, Ownable 
+contract EarthCitizenshipContract is 
+    Initializable,
+    ERC721Upgradeable,
+    ERC721URIStorageUpgradeable,
+    ERC721BurnableUpgradeable,
+    OwnableUpgradeable,
+    UUPSUpgradeable
 {
     uint256 private _nextTokenId;
     string private _baseTokenURI;
 
-    constructor() ERC721("EarthCitizenship", "GEC") Ownable(msg.sender) 
-    {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address initialOwner) public initializer {
+        __ERC721_init("EarthCitizenship", "GEC");
+        __ERC721URIStorage_init();
+        __ERC721Burnable_init();
+        __Ownable_init(initialOwner);
+        __UUPSUpgradeable_init();
         _nextTokenId = 0;
     }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     function setBaseURI(string memory newURI) external onlyOwner 
     {
@@ -37,7 +56,7 @@ contract EarthCitizenshipContract is ERC721, ERC721URIStorage, ERC721Burnable, O
     function tokenURI(uint256 tokenId)
         public
         view
-        override(ERC721, ERC721URIStorage)
+        override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
         returns (string memory)
     {
         return super.tokenURI(tokenId);
@@ -46,7 +65,7 @@ contract EarthCitizenshipContract is ERC721, ERC721URIStorage, ERC721Burnable, O
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(ERC721, ERC721URIStorage)
+        override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
