@@ -1,5 +1,4 @@
 **/.deps/
 **/.vscode/
 **/artifacts/
-**/bin/
-**/obj/
+**/.states/

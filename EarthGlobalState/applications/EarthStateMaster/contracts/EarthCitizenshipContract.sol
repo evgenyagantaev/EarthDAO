@@ -29,7 +29,6 @@ contract EarthCitizenshipContract is ERC721, ERC721URIStorage, ERC721Burnable, O
         require(balanceOf(msg.sender) == 0, "Address already has a citizenship token");
         uint256 tokenId = _nextTokenId++;
         _safeMint(msg.sender, tokenId);
-        _setTokenURI(tokenId, _baseTokenURI);
     }
 
     // The following functions are overrides required by Solidity.
@@ -40,7 +39,8 @@ contract EarthCitizenshipContract is ERC721, ERC721URIStorage, ERC721Burnable, O
         override(ERC721, ERC721URIStorage)
         returns (string memory)
     {
-        return super.tokenURI(tokenId);
+        _requireMinted(tokenId);
+        return _baseTokenURI;
     }
 
     function supportsInterface(bytes4 interfaceId)
