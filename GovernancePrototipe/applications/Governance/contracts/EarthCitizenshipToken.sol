@@ -16,17 +16,22 @@ import "@openzeppelin/contracts-upgradeable/utils/CountersUpgradeable.sol";
  *  - Токен при чеканке сразу зачисляется на счет вызвавшего.
  *  - Перевод токена запрещен: разрешены только mint (from == address(0)) и burn (to == address(0)).
  *  - Сжигать токен может только его владелец.
- *  - Контракт поддерживает механизм апгрейда через UUPS.
+ *  - Контракт поддерживает механизм апгрейда через UUPS, который может быть вызван только владельцем.
+ *
+ * @notice При инициализации в качестве владельца остается деплоер. Для передачи владения (например, 
+ *         прокси‑Governance) необходимо вызвать функцию transferOwnershipToGovernance.
  */
 contract EarthCitizenshipToken is Initializable, ERC721Upgradeable, ERC721URIStorageUpgradeable, ERC721BurnableUpgradeable, OwnableUpgradeable, UUPSUpgradeable {
     using CountersUpgradeable for CountersUpgradeable.Counter;
     CountersUpgradeable.Counter private _tokenIdCounter;
 
-    // Хранение базового URI для токенов (при желании можно дополнять tokenId)
+    // Хранение базового URI для токенов
     string private _baseTokenURI;
 
-    /// @notice Инициализация контракта (заменяет конструктор).
-    /// @param baseURI Новый базовый URI, который будет назначаться при чеканке.
+    /**
+     * @notice Инициализация контракта (заменяет конструктор).
+     * @param baseURI Новый базовый URI для токенов.
+     */
     function initialize(string memory baseURI) public initializer {
         __ERC721_init("EarthCitizenship", "ECT");
         __ERC721URIStorage_init();
@@ -35,6 +40,7 @@ contract EarthCitizenshipToken is Initializable, ERC721Upgradeable, ERC721URISto
         __UUPSUpgradeable_init();
 
         _baseTokenURI = baseURI;
+        // Владелец остается деплоером (msg.sender), передача владения на Governance будет выполнена отдельно.
     }
 
     /// @notice Чеканит (mint) токен для msg.sender, если у него ещё нет NFT.
@@ -44,12 +50,11 @@ contract EarthCitizenshipToken is Initializable, ERC721Upgradeable, ERC721URISto
         uint256 tokenId = _tokenIdCounter.current();
 
         _safeMint(msg.sender, tokenId);
-        // Здесь для простоты в качестве tokenURI назначается базовый URI.
-        // Можно расширить логику, чтобы к базовому URI добавлялось значение tokenId.
+        // Для простоты в качестве tokenURI назначается базовый URI.
         _setTokenURI(tokenId, _baseTokenURI);
     }
 
-    /// @notice Позволяет владельцу (owner) обновить базовый URI.
+    /// @notice Позволяет владельцу обновить базовый URI.
     function setBaseURI(string memory newURI) external onlyOwner {
         _baseTokenURI = newURI;
     }
@@ -94,7 +99,17 @@ contract EarthCitizenshipToken is Initializable, ERC721Upgradeable, ERC721URISto
 
     // --- Функция авторизации апгрейда (UUPS) ---
     /**
-     * @dev Разрешает апгрейд контракта только владельцу (owner).
+     * @dev Разрешает апгрейд контракта только владельцу.
      */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    /**
+     * @notice Передает владение токеном на адрес прокси Governance.
+     *         Вызывается текущим владельцем (деплоером или уже переданным Governance).
+     * @param governanceAddr Новый адрес владельца (прокси Governance).
+     */
+    function transferOwnershipToGovernance(address governanceAddr) external onlyOwner {
+        require(governanceAddr != address(0), "Governance address cannot be zero");
+        transferOwnership(governanceAddr);
+    }
 }

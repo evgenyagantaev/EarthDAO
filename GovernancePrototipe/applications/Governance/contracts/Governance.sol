@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
-import "@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-
-interface IImplementation {
-    function initialize(address _governanceContract) external;
-}
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol"; 
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol"; 
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol"; 
+import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/IERC721EnumerableUpgradeable.sol";
 
 /**
  * @title Governance
- * @dev Контракт для децентрализованного управления.
+ * @dev Обновляемый (upgradeable) контракт для децентрализованного управления.
+ *      Помимо стандартных функций голосования и апгрейда через UUPS,
+ *      контракт хранит реестр (mapping) прокси‑контрактов с текстовыми именами.
+ *      Функции управления реестром (добавить, удалить, заменить) доступны только через голосование,
+ *      то есть их вызов производится самим Governance контрактом.
  */
-contract Governance is ReentrancyGuard {
+contract Governance is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable {
+
+    // ===== Структура и переменные голосования =====
     struct Proposal {
         address target;
         bytes data;
@@ -22,55 +26,80 @@ contract Governance is ReentrancyGuard {
         bool executed;
         uint256 snapshotBlock;
     }
-
+    
+    // Хранение предложений
     mapping(uint256 => Proposal) public proposals;
     uint256 public proposalCount;
 
-    IERC721Enumerable public votingToken;
+    // Токен, используемый для голосования (например, ERC721Enumerable)
+    IERC721EnumerableUpgradeable public votingToken;
 
+    // Параметры голосования
     uint256 public voteWeightPerToken;
-    uint256 public quorumPercentage;
-    uint256 public votingPeriod;
-    
+    uint256 public quorumPercentage; // например, 20 означает 20%
+    uint256 public votingPeriod;     // период голосования в секундах
+
+    // Фиксация факта голосования и срез голосов
     mapping(uint256 => mapping(address => bool)) public hasVoted;
     mapping(uint256 => mapping(address => uint256)) public snapshotVotingPower;
-    
-    event VoteWeightUpdated(uint256 oldWeight, uint256 newWeight);
-    event QuorumUpdated(uint256 oldQuorum, uint256 newQuorum);
-    event VotingPeriodUpdated(uint256 oldPeriod, uint256 newPeriod);
 
+    // События голосования
     event ProposalCreated(uint256 indexed proposalId);
     event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 votingPower);
     event ProposalExecuted(uint256 indexed proposalId);
     event ProposalCancelled(uint256 indexed proposalId);
+    event GovernanceUpgraded(address indexed newImplementation);
 
-    mapping(uint256 => bool) public cancelled;
+    // ===== Реестр прокси‑контрактов =====
+    // mapping текстового имени контракта (например, "OfficialCalendar") => адрес прокси
+    mapping(string => address) public contractRegistry;
 
-    // --- Реестр utility-контрактов ---
-    address[] public utilityContracts;
-    mapping(address => bool) public isUtilityContract;
+    // События реестра
+    event RegistryContractAdded(string indexed name, address proxy);
+    event RegistryContractRemoved(string indexed name, address proxy);
+    event RegistryContractReplaced(string indexed name, address oldProxy, address newProxy);
 
-    event UtilityContractAdded(address indexed utilityContract);
-    event UtilityContractRemoved(address indexed utilityContract);
-    event UtilityContractReplaced(address indexed oldUtilityContract, address indexed newUtilityContract);
+    // ===== Модификаторы =====
+    /**
+     * @dev Доступно только если вызов инициирован самим Governance контрактом.
+     *      Это гарантирует, что данные функции могут быть вызваны только через успешно выполненное голосование.
+     */
+    modifier onlyGovernance() {
+        require(msg.sender == address(this), "Governance: Only governance can call");
+        _;
+    }
 
-    constructor(
+    // ===== Функция инициализации =====
+    /**
+     * @notice Инициализация контракта Governance.
+     * @param _votingToken Адрес токена для голосования.
+     * @param _voteWeightPerToken Вес голоса для каждого токена.
+     * @param _quorumPercentage Минимальный процент голосов для кворума.
+     * @param _votingPeriod Период голосования в секундах.
+     */
+    function initialize(
         address _votingToken,
         uint256 _voteWeightPerToken,
         uint256 _quorumPercentage,
         uint256 _votingPeriod
-    ) {
-        votingToken = IERC721Enumerable(_votingToken);
+    ) public initializer {
+        require(_votingToken != address(0), "Invalid token address");
+        __ReentrancyGuard_init();
+        __UUPSUpgradeable_init();
+
+        votingToken = IERC721EnumerableUpgradeable(_votingToken);
         voteWeightPerToken = _voteWeightPerToken;
         quorumPercentage = _quorumPercentage;
         votingPeriod = _votingPeriod;
     }
 
-    function getTotalVotingPower() public view returns (uint256) {
-        uint256 supply = votingToken.totalSupply();
-        return supply * voteWeightPerToken;
-    }
-
+    // ===== Функции голосования =====
+    /**
+     * @notice Создает новое предложение.
+     * @param target Адрес контракта, вызов которого требуется выполнить.
+     * @param data Данные для вызова target.
+     * @return proposalId Идентификатор созданного предложения.
+     */
     function createProposal(address target, bytes memory data) external returns (uint256) {
         proposalCount++;
         proposals[proposalCount] = Proposal({
@@ -87,142 +116,121 @@ contract Governance is ReentrancyGuard {
         return proposalCount;
     }
 
+    /**
+     * @notice Голосует за или против предложения.
+     * @param proposalId Идентификатор предложения.
+     * @param support true — голос "за", false — "против".
+     */
     function vote(uint256 proposalId, bool support) external {
         Proposal storage proposal = proposals[proposalId];
         require(block.timestamp < proposal.deadline, "Voting period ended");
         require(!proposal.executed, "Proposal already executed");
         require(!hasVoted[proposalId][msg.sender], "Already voted");
-        
-        uint256 votingPower;
-        if (snapshotVotingPower[proposalId][msg.sender] > 0) {
-            votingPower = snapshotVotingPower[proposalId][msg.sender];
-        } else {
+
+        uint256 votingPower = snapshotVotingPower[proposalId][msg.sender];
+        if (votingPower == 0) {
             votingPower = votingToken.balanceOf(msg.sender) * voteWeightPerToken;
             snapshotVotingPower[proposalId][msg.sender] = votingPower;
         }
-        
         require(votingPower > 0, "No voting power");
-        
+
         if (support) {
             proposal.votesFor += votingPower;
         } else {
             proposal.votesAgainst += votingPower;
         }
-        
         hasVoted[proposalId][msg.sender] = true;
         emit Voted(proposalId, msg.sender, support, votingPower);
     }
 
-    /// @dev Модификатор, разрешающий вызов функции только через голосование (т.е. если вызов сделан самим контрактом).
-    modifier onlyGovernance() {
-        require(msg.sender == address(this), "Only governance can call");
-        _;
-    }
-
-    function cancelProposal(uint256 proposalId) external onlyGovernance {
-        Proposal storage proposal = proposals[proposalId];
-        require(block.timestamp < proposal.deadline, "Voting period ended");
-        require(!proposal.executed, "Proposal already executed");
-        require(!cancelled[proposalId], "Proposal already cancelled");
-        
-        cancelled[proposalId] = true;
-        emit ProposalCancelled(proposalId);
-    }
-
     /**
-     * @notice Выполнение предложения с защитой от повторных вызовов (reentrancy).
-     * @dev Функция отмечает предложение как исполненное до выполнения внешнего вызова,
-     *      что соответствует паттерну "checks-effects-interactions".
+     * @notice Исполняет предложение, если выполнены условия кворума и большинство голосов "за".
+     * @param proposalId Идентификатор предложения.
      */
     function executeProposal(uint256 proposalId) external nonReentrant {
         Proposal storage proposal = proposals[proposalId];
         require(block.timestamp >= proposal.deadline, "Voting period not ended");
         require(!proposal.executed, "Proposal already executed");
-        require(!cancelled[proposalId], "Proposal was cancelled");
-        
+
         uint256 totalVotes = proposal.votesFor + proposal.votesAgainst;
-        uint256 minQuorum = (getTotalVotingPower() * quorumPercentage) / 100;
+        uint256 minQuorum = (votingToken.totalSupply() * voteWeightPerToken * quorumPercentage) / 100;
         require(totalVotes >= minQuorum, "Quorum not reached");
         require(proposal.votesFor > proposal.votesAgainst, "Proposal not passed");
 
-        // Обновляем состояние до внешнего вызова
+        // Обновляем состояние до внешнего вызова (checks-effects-interactions)
         proposal.executed = true;
         
-        // Выполняем внешний вызов
+        // Выполняем вызов целевого контракта
         (bool success, ) = proposal.target.call(proposal.data);
         require(success, "Proposal execution failed");
 
         emit ProposalExecuted(proposalId);
     }
 
-    function updateVoteWeight(uint256 newWeight) external onlyGovernance {
-        require(newWeight > 0, "Weight must be positive");
-        emit VoteWeightUpdated(voteWeightPerToken, newWeight);
-        voteWeightPerToken = newWeight;
+    /**
+     * @notice Отменяет предложение. Отмену можно выполнить только через голосование.
+     * @param proposalId Идентификатор предложения.
+     */
+    function cancelProposal(uint256 proposalId) external onlyGovernance {
+        Proposal storage proposal = proposals[proposalId];
+        require(block.timestamp < proposal.deadline, "Voting period ended");
+        require(!proposal.executed, "Proposal already executed");
+        
+        proposal.executed = true;
+        emit ProposalCancelled(proposalId);
     }
 
-    function updateQuorum(uint256 newQuorum) external onlyGovernance {
-        require(newQuorum > 0 && newQuorum <= 100, "Invalid quorum percentage");
-        emit QuorumUpdated(quorumPercentage, newQuorum);
-        quorumPercentage = newQuorum;
+    // ===== Функции апгрейда Governance =====
+    /**
+     * @notice Инициирует апгрейд контракта Governance через голосование.
+     * @param newImplementation Адрес новой реализации.
+     */
+    function upgradeGovernance(address newImplementation) external onlyGovernance {
+        _upgradeToAndCallUUPS(newImplementation, new bytes(0), false);
+        emit GovernanceUpgraded(newImplementation);
     }
 
-    function updateVotingPeriod(uint256 newPeriod) external onlyGovernance {
-        require(newPeriod > 0, "Period must be positive");
-        emit VotingPeriodUpdated(votingPeriod, newPeriod);
-        votingPeriod = newPeriod;
+    /**
+     * @dev Авторизация апгрейда (UUPS). Разрешено только через голосование.
+     */
+    function _authorizeUpgrade(address newImplementation) internal override onlyGovernance {
+        // Дополнительные проверки можно добавить здесь.
     }
 
-    function getVotingPower(address voter, uint256 proposalId) public view returns (uint256) {
-        if (snapshotVotingPower[proposalId][voter] > 0) {
-            return snapshotVotingPower[proposalId][voter];
-        }
-        return votingToken.balanceOf(voter) * voteWeightPerToken;
+    // ===== Функции управления реестром прокси‑контрактов =====
+    /**
+     * @notice Добавляет новый адрес прокси в реестр.
+     * @param name Текстовое имя контракта.
+     * @param proxy Адрес прокси‑контракта.
+     */
+    function addContractToRegistry(string memory name, address proxy) external onlyGovernance {
+        require(proxy != address(0), "Invalid proxy address");
+        require(contractRegistry[name] == address(0), "Contract already registered");
+        contractRegistry[name] = proxy;
+        emit RegistryContractAdded(name, proxy);
     }
 
-    // ============================================
-    // Реестр Utility-контрактов
-    // ============================================
-
-    function addUtilityContract(address _utilityContract) external onlyGovernance {
-        require(_utilityContract != address(0), "Invalid contract address");
-        require(_utilityContract.code.length > 0, "Address has no code");
-        require(!isUtilityContract[_utilityContract], "Already registered");
-
-        utilityContracts.push(_utilityContract);
-        isUtilityContract[_utilityContract] = true;
-        emit UtilityContractAdded(_utilityContract);
+    /**
+     * @notice Удаляет адрес прокси из реестра по имени.
+     * @param name Текстовое имя контракта.
+     */
+    function removeContractFromRegistry(string memory name) external onlyGovernance {
+        require(contractRegistry[name] != address(0), "Contract not registered");
+        address removedProxy = contractRegistry[name];
+        delete contractRegistry[name];
+        emit RegistryContractRemoved(name, removedProxy);
     }
 
-    function removeUtilityContract(address _utilityContract) external onlyGovernance {
-        require(isUtilityContract[_utilityContract], "Not registered");
-
-        isUtilityContract[_utilityContract] = false;
-
-        for (uint i = 0; i < utilityContracts.length; i++) {
-            if (utilityContracts[i] == _utilityContract) {
-                utilityContracts[i] = utilityContracts[utilityContracts.length - 1];
-                utilityContracts.pop();
-                break;
-            }
-        }
-        emit UtilityContractRemoved(_utilityContract);
-    }
-
-    function replaceUtilityContract(address _oldUtility, address _newUtility) external onlyGovernance {
-        require(isUtilityContract[_oldUtility], "Old utility not registered");
-        require(_newUtility != address(0), "Invalid new contract address");
-        require(_newUtility.code.length > 0, "New address has no code");
-        require(!isUtilityContract[_newUtility], "New utility already registered");
-
-        for (uint i = 0; i < utilityContracts.length; i++) {
-            if (utilityContracts[i] == _oldUtility) {
-                utilityContracts[i] = _newUtility;
-                break;
-            }
-        }
-        isUtilityContract[_oldUtility] = false;
-        isUtilityContract[_newUtility] = true;
-        emit UtilityContractReplaced(_oldUtility, _newUtility);
+    /**
+     * @notice Заменяет адрес прокси для данного имени.
+     * @param name Текстовое имя контракта.
+     * @param newProxy Новый адрес прокси‑контракта.
+     */
+    function replaceContractInRegistry(string memory name, address newProxy) external onlyGovernance {
+        require(newProxy != address(0), "Invalid proxy address");
+        require(contractRegistry[name] != address(0), "Contract not registered");
+        address oldProxy = contractRegistry[name];
+        contractRegistry[name] = newProxy;
+        emit RegistryContractReplaced(name, oldProxy, newProxy);
     }
 }
